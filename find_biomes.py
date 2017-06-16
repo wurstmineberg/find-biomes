@@ -3,6 +3,7 @@
 """Find coordinates with a given biome in a Minecraft world.
 
 Usage:
+  find-biomes [options] adv-time
   find-biomes [options] [<biome>...]
   find-biomes -h | --help
 
@@ -22,14 +23,13 @@ import requests
 
 CACHE = {
     'all_chunks': None,
-    'chunks': {},
     'world': None
 }
 
 biomes_response = requests.get('https://assets.wurstmineberg.de/json/biomes.json')
 biomes_response.raise_for_status()
 Biome = enum.Enum('Biomes', {
-    biome_info['id']: int(int_id)
+    biome_info['id']: (int(int_id), biome_info['adventuringTime'])
     for int_id, biome_info in biomes_response.json()['biomes'].items()
 }, module=__name__)
 
@@ -54,28 +54,32 @@ def api_json(arguments, path):
     response.raise_for_status()
     return response.json()
 
-def get_closest_coords(arguments, biome, start_x, start_z):
+def get_closest_coords(arguments, biomes, start_x, start_z):
     chunks_by_distance = list(all_chunks_sorted_by_distance(arguments, start_x, start_z))
-    found_chunk_distance = None
+    result = {
+        biome: {'x': None, 'z': None, 'found_chunk_distance': None}
+        for biome in biomes
+    }
     for i, (chunk_distance, chunk) in enumerate(chunks_by_distance):
         if arguments['--verbose']:
             progress = min(4, int(5 * i / len(chunks_by_distance)))
-            print('[{}{}] searching for {}: {} out of {} chunks checked'.format('=' * progress, '.' * (4 - progress), biome.name, i, len(chunks_by_distance)), end='\r', flush=True)
-        if found_chunk_distance is not None and chunk_distance > found_chunk_distance + 3:
+            print('[{}{}] {} out of {} chunks checked, {} out of {} biomes found'.format('=' * progress, '.' * (4 - progress), i, len(chunks_by_distance), more_itertools.quantify(biome_info['found_chunk_distance'] is not None for biome_info in result.values()), len(result)), end='\r', flush=True)
+        if all(biome_result['found_chunk_distance'] is not None and chunk_distance > biome_result['found_chunk_distance'] + 3 for biome_result in result.values()):
             break # if the chunk distance is 4 more than the last found, the block distance cannot be smaller
-        if (chunk['x'], chunk['z']) not in CACHE['chunks']:
-            CACHE['chunks'][chunk['x'], chunk['z']] = api_json(arguments, '/v2/world/{{world}}/chunks/overworld/chunk/{}/0/{}.json'.format(chunk['x'], chunk['z']))[0]
-        for row in CACHE['chunks'][chunk['x'], chunk['z']]:
+        chunk_data = api_json(arguments, '/v2/world/{{world}}/chunks/overworld/chunk/{}/0/{}.json'.format(chunk['x'], chunk['z']))
+        for row in chunk_data[0]:
             for block in row:
-                if block['biome'] == biome.name:
-                    if found_chunk_distance is None or abs(block['x'] - start_x) + abs(block['z'] - start_z) < abs(found_x - start_x) + abs(found_z - start_z):
-                        found_chunk_distance = chunk_distance
-                        found_x = block['x']
-                        found_z = block['z']
+                biome = Biome[block['biome']]
+                if biome in result:
+                    if result[biome]['found_chunk_distance'] is None or abs(block['x'] - start_x) + abs(block['z'] - start_z) < abs(result[biome]['x'] - start_x) + abs(result[biome]['z'] - start_z):
+                        result[biome] = {
+                            'found_chunk_distance': chunk_distance,
+                            'x': block['x'],
+                            'z': block['z']
+                        }
     if arguments['--verbose']:
         print('[ ok ]')
-    if found_chunk_distance is not None:
-        return found_x, found_z
+    return result
 
 def get_world(arguments):
     if arguments['--world']:
@@ -88,6 +92,8 @@ def get_world(arguments):
 
 if __name__ == '__main__':
     arguments = docopt.docopt(__doc__)
+    if arguments['adv-time']:
+        biomes = [biome for biome in Biome if biome.value[1]]
     if arguments['<biome>']:
         biomes = [Biome[biome_str] for biome_str in arguments['<biome>']]
     else:
@@ -104,9 +110,9 @@ if __name__ == '__main__':
         start_z = level['Data']['SpawnZ']
         if arguments['--verbose']:
             print('[ ** ] start coords: {},{}'.format(start_x, start_z))
-    for biome in biomes:
-        result = get_closest_coords(arguments, biome, start_x, start_z)
-        if result is None:
+    result = get_closest_coords(arguments, biomes, start_x, start_z)
+    for biome in sorted(biomes, key=lambda biome: biome.value[0]):
+        if result[biome] is None:
             print('[ !! ] {}: not found'.format(biome.name))
         else:
             x, z = result
