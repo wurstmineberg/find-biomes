@@ -66,7 +66,12 @@ def get_closest_coords(arguments, biomes, start_x, start_z):
             print('[{}{}] {} out of {} chunks checked, {} out of {} biomes found'.format('=' * progress, '.' * (4 - progress), i, len(chunks_by_distance), more_itertools.quantify(biome_info['found_chunk_distance'] is not None for biome_info in result.values()), len(result)), end='\r', flush=True)
         if all(biome_result['found_chunk_distance'] is not None and chunk_distance > biome_result['found_chunk_distance'] + 3 for biome_result in result.values()):
             break # if the chunk distance is 4 more than the last found, the block distance cannot be smaller
-        chunk_data = api_json(arguments, '/v2/world/{{world}}/chunks/overworld/chunk/{}/0/{}.json'.format(chunk['x'], chunk['z']))
+        while True:
+            try:
+                chunk_data = api_json(arguments, '/v2/world/{{world}}/chunks/overworld/chunk/{}/0/{}.json'.format(chunk['x'], chunk['z']))
+            except requests.RequestException:
+                continue
+            break
         for row in chunk_data[0]:
             for block in row:
                 biome = Biome[block['biome']]
